@@ -8,6 +8,13 @@ import { inr } from '@/lib/billing'
 import { supabase } from '@/lib/supabase'
 
 type Row = { kind: string; method: string; amount: number; sessions: { stations: { name: string } | null } | null }
+type Ended = {
+  id: string; started_at: string; ended_at: string; billed_minutes: number | null; amount: number | null; discount: number
+  stations: { name: string } | null; customers: { name: string | null; phone: string } | null
+  rate_plans: { name: string } | null; payments: { method: string; amount: number }[]
+}
+
+const hm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
 const today = () => new Date().toLocaleDateString('en-CA') // YYYY-MM-DD local
 
@@ -27,16 +34,19 @@ export default function Reports() {
       const [a, b] = [from.toISOString(), to.toISOString()]
       const [p, s] = await Promise.all([
         supabase.from('payments').select('kind, method, amount, sessions(stations(name))').gte('created_at', a).lt('created_at', b),
-        supabase.from('sessions').select('id', { count: 'exact', head: true }).eq('status', 'ended').gte('ended_at', a).lt('ended_at', b),
+        supabase.from('sessions')
+          .select('id, started_at, ended_at, billed_minutes, amount, discount, stations(name), customers(name, phone), rate_plans(name), payments(method, amount)')
+          .eq('status', 'ended').gte('ended_at', a).lt('ended_at', b).order('ended_at', { ascending: false }),
       ])
       const e = p.error || s.error
       if (e) throw new Error(e.message)
-      return { rows: (p.data ?? []) as unknown as Row[], sessions: s.count ?? 0 }
+      return { rows: (p.data ?? []) as unknown as Row[], ended: (s.data ?? []) as unknown as Ended[] }
     },
     placeholderData: keepPreviousData,
   })
   const rows = data?.rows ?? []
-  const sessions = data?.sessions ?? 0
+  const ended = data?.ended ?? []
+  const sessions = ended.length
 
   const sessionRows = rows.filter((r) => r.kind === 'session')
   const revenue = sessionRows.reduce((t, r) => t + Number(r.amount), 0)
@@ -59,6 +69,37 @@ export default function Reports() {
         <Breakdown title="By payment method" rows={byMethod} />
         <Breakdown title="By station" rows={byStation} />
       </div>
+      <Card>
+        <CardHeader><CardTitle>Sessions</CardTitle></CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Time</TableHead><TableHead>Station</TableHead><TableHead>Customer</TableHead><TableHead>Plan</TableHead>
+                <TableHead className="text-right">Min</TableHead><TableHead className="text-right">Amount</TableHead>
+                <TableHead className="text-right">Discount</TableHead><TableHead>Paid by</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {ended.map((s) => (
+                <TableRow key={s.id}>
+                  <TableCell className="tabular-nums">{hm(s.started_at)}–{hm(s.ended_at)}</TableCell>
+                  <TableCell>{s.stations?.name ?? '—'}</TableCell>
+                  <TableCell>{s.customers ? s.customers.name || s.customers.phone : 'Walk-in'}</TableCell>
+                  <TableCell>{s.rate_plans?.name ?? '—'}</TableCell>
+                  <TableCell className="text-right tabular-nums">{s.billed_minutes ?? '—'}</TableCell>
+                  <TableCell className="text-right tabular-nums">{inr(Number(s.amount ?? 0))}</TableCell>
+                  <TableCell className="text-right tabular-nums">{Number(s.discount) ? inr(Number(s.discount)) : '—'}</TableCell>
+                  <TableCell className="capitalize">
+                    {s.payments.filter((p) => Number(p.amount) > 0).map((p) => `${p.method === 'upi' ? 'UPI' : p.method} ${inr(Number(p.amount))}`).join(', ') || '—'}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {ended.length === 0 && <TableRow><TableCell colSpan={8} className="text-muted-foreground">No sessions ended this day</TableCell></TableRow>}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   )
 }
