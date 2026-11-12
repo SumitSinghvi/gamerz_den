@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -7,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Pick } from '@/components/Pick'
 import type { RatePlan } from '@/lib/billing'
 import { supabase, type Profile, type Station } from '@/lib/supabase'
+import { refresh, run, useRatePlans, useStations } from '@/lib/queries'
 
 const done = (error: { message: string } | null, msg = 'Saved') => (error ? toast.error(error.message) : toast.success(msg))
 
@@ -27,22 +29,26 @@ export default function Settings({ isOwner }: { isOwner: boolean }) {
 }
 
 function Rates({ ro }: { ro: boolean }) {
-  const [rows, setRows] = useState<RatePlan[]>([])
-  const load = useCallback(async () => {
-    const { data } = await supabase.from('rate_plans').select('*').order('console_type').order('players')
-    setRows(data ?? [])
-  }, [])
-  useEffect(() => { load() }, [load])
+  // Unsaved edits per plan id, layered over cached rows so a background refetch never wipes typing.
+  const [edits, setEdits] = useState<Record<string, Partial<RatePlan>>>({})
+  const rows = (useRatePlans().data ?? []).map((r) => ({ ...r, ...edits[r.id] }))
 
-  const set = (i: number, patch: Partial<RatePlan>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  const set = (i: number, patch: Partial<RatePlan>) => {
+    const id = rows[i].id
+    setEdits({ ...edits, [id]: { ...edits[id], ...patch } })
+  }
   const save = async (r: RatePlan) => {
     const { id, ...rest } = r
-    done((await supabase.from('rate_plans').update({ ...rest, peak_start: r.peak_start || null, peak_end: r.peak_end || null }).eq('id', id)).error)
+    const { error } = await supabase.from('rate_plans').update({ ...rest, peak_start: r.peak_start || null, peak_end: r.peak_end || null }).eq('id', id)
+    done(error)
+    if (error) return
+    await refresh()
+    setEdits((e) => Object.fromEntries(Object.entries(e).filter(([k]) => k !== id)))
   }
   const add = async () => {
     const { error } = await supabase.from('rate_plans').insert({ name: 'New plan', rate_per_hour: 100 })
     if (error) return toast.error(error.message)
-    load()
+    refresh()
   }
   const num = (v: string) => (v === '' ? 0 : Number(v))
 
@@ -85,14 +91,10 @@ const C = ({ label, className, ...props }: React.ComponentProps<typeof TableCell
 )
 
 function Stations({ ro }: { ro: boolean }) {
-  const [rows, setRows] = useState<Station[]>([])
+  const rows = useStations().data ?? []
   const [name, setName] = useState('')
   const [type, setType] = useState('PS5')
-  const load = useCallback(async () => {
-    const { data } = await supabase.from('stations').select('*').order('name')
-    setRows(data ?? [])
-  }, [])
-  useEffect(() => { load() }, [load])
+  const load = refresh
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -133,12 +135,8 @@ function Stations({ ro }: { ro: boolean }) {
 }
 
 function Staff({ ro }: { ro: boolean }) {
-  const [rows, setRows] = useState<Profile[]>([])
-  const load = useCallback(async () => {
-    const { data } = await supabase.from('profiles').select('*').order('created_at')
-    setRows(data ?? [])
-  }, [])
-  useEffect(() => { load() }, [load])
+  const rows = useQuery({ queryKey: ['profiles'], queryFn: () => run<Profile[]>(supabase.from('profiles').select('*').order('created_at')) }).data ?? []
+  const load = refresh
 
   const setRole = async (p: Profile, role: string) => {
     done((await supabase.from('profiles').update({ role }).eq('id', p.id)).error, 'Role updated')

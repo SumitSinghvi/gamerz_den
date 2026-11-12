@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -9,38 +9,24 @@ import { Pick } from '@/components/Pick'
 import { XIcon } from 'lucide-react'
 import { bill, fmtClock, inr, playedMinutes, type GameSession, type RatePlan } from '@/lib/billing'
 import { PAY_METHODS, supabase, upsertCustomer, type Customer, type PayMethod, type Station } from '@/lib/supabase'
+import { refresh, useOpenSessions, useRatePlans, useStations } from '@/lib/queries'
 
 const err = (e: { message: string } | null) => e && toast.error(e.message)
 
+const NONE: never[] = []
+
 export default function Floor() {
-  const [stations, setStations] = useState<Station[]>([])
-  const [plans, setPlans] = useState<RatePlan[]>([])
-  const [open, setOpen] = useState<GameSession[]>([])
+  const stations = useStations().data ?? NONE
+  const plans = useRatePlans().data ?? NONE
+  const open = useOpenSessions().data ?? NONE
   const [now, setNow] = useState(Date.now())
   const [selId, setSelId] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    const [st, rp, se] = await Promise.all([
-      supabase.from('stations').select('*').order('name'),
-      supabase.from('rate_plans').select('*').order('players'),
-      supabase.from('sessions').select('*, customers(name, phone)').neq('status', 'ended'),
-    ])
-    err(st.error || rp.error || se.error)
-    setStations(st.data ?? [])
-    setPlans(rp.data ?? [])
-    setOpen(se.data ?? [])
-  }, [])
+  const load = refresh
 
   useEffect(() => {
-    load()
-    const ch = supabase
-      .channel('floor')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions' }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stations' }, load)
-      .subscribe()
     const t = setInterval(() => setNow(Date.now()), 1000)
-    return () => { supabase.removeChannel(ch); clearInterval(t) }
-  }, [load])
+    return () => clearInterval(t)
+  }, [])
 
   const planById = useMemo(() => new Map(plans.map((p) => [p.id, p])), [plans])
   const byStation = useMemo(() => new Map(open.map((s) => [s.station_id, s])), [open])

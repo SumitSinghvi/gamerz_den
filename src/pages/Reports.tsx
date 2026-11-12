@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { toast } from 'sonner'
+import { useState } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -19,23 +19,24 @@ const sumBy = (rows: Row[], key: (r: Row) => string) => {
 
 export default function Reports() {
   const [day, setDay] = useState(today())
-  const [rows, setRows] = useState<Row[]>([])
-  const [sessions, setSessions] = useState(0)
-
-  useEffect(() => {
-    const from = new Date(`${day}T00:00:00`)
-    const to = new Date(from.getTime() + 864e5)
-    const [a, b] = [from.toISOString(), to.toISOString()]
-    Promise.all([
-      supabase.from('payments').select('kind, method, amount, sessions(stations(name))').gte('created_at', a).lt('created_at', b),
-      supabase.from('sessions').select('id', { count: 'exact', head: true }).eq('status', 'ended').gte('ended_at', a).lt('ended_at', b),
-    ]).then(([p, s]) => {
+  const { data } = useQuery({
+    queryKey: ['reports', day],
+    queryFn: async () => {
+      const from = new Date(`${day}T00:00:00`)
+      const to = new Date(from.getTime() + 864e5)
+      const [a, b] = [from.toISOString(), to.toISOString()]
+      const [p, s] = await Promise.all([
+        supabase.from('payments').select('kind, method, amount, sessions(stations(name))').gte('created_at', a).lt('created_at', b),
+        supabase.from('sessions').select('id', { count: 'exact', head: true }).eq('status', 'ended').gte('ended_at', a).lt('ended_at', b),
+      ])
       const e = p.error || s.error
-      if (e) toast.error(e.message)
-      setRows((p.data ?? []) as unknown as Row[])
-      setSessions(s.count ?? 0)
-    })
-  }, [day])
+      if (e) throw new Error(e.message)
+      return { rows: (p.data ?? []) as unknown as Row[], sessions: s.count ?? 0 }
+    },
+    placeholderData: keepPreviousData,
+  })
+  const rows = data?.rows ?? []
+  const sessions = data?.sessions ?? 0
 
   const sessionRows = rows.filter((r) => r.kind === 'session')
   const revenue = sessionRows.reduce((t, r) => t + Number(r.amount), 0)

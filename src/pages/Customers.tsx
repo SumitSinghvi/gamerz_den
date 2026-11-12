@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { refresh, run } from '@/lib/queries'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -11,21 +13,21 @@ import { supabase, upsertCustomer, type Customer } from '@/lib/supabase'
 
 export default function Customers() {
   const [q, setQ] = useState('')
-  const [rows, setRows] = useState<Customer[]>([])
   const [phone, setPhone] = useState('')
   const [name, setName] = useState('')
   const [topup, setTopup] = useState<Customer | null>(null)
 
-  const load = useCallback(async () => {
-    let query = supabase.from('customers').select('*').order('created_at', { ascending: false }).limit(50)
-    const term = q.trim().replace(/[%,()]/g, '')
-    if (term) query = query.or(`phone.ilike.%${term}%,name.ilike.%${term}%`)
-    const { data, error } = await query
-    if (error) toast.error(error.message)
-    setRows(data ?? [])
-  }, [q])
-
-  useEffect(() => { load() }, [load])
+  const term = q.trim().replace(/[%,()]/g, '')
+  const rows = useQuery({
+    queryKey: ['customers', term],
+    queryFn: () => {
+      let query = supabase.from('customers').select('*').order('created_at', { ascending: false }).limit(50)
+      if (term) query = query.or(`phone.ilike.%${term}%,name.ilike.%${term}%`)
+      return run<Customer[]>(query)
+    },
+    placeholderData: keepPreviousData, // keep showing old results while the next search loads
+  }).data ?? []
+  const load = refresh
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault()

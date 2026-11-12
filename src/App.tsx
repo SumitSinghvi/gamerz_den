@@ -4,10 +4,26 @@ import Floor from '@/pages/Floor'
 import Customers from '@/pages/Customers'
 import Settings from '@/pages/Settings'
 import Reports from '@/pages/Reports'
+import { useTheme } from 'next-themes'
+import { MoonIcon, SunIcon } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { useRealtimeRefresh } from '@/lib/queries'
+
+function ThemeToggle() {
+  const { resolvedTheme, setTheme } = useTheme()
+  const dark = resolvedTheme === 'dark'
+  return (
+    <Button variant="ghost" size="icon" className="ml-auto" aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      onClick={() => setTheme(dark ? 'light' : 'dark')}>
+      {dark ? <SunIcon /> : <MoonIcon />}
+    </Button>
+  )
+}
 
 // ponytail: login removed for client demo (RLS disabled in migration 20261112190000_demo_disable_rls).
 // For field use: restore auth gate in App.tsx from git history (pages/Login.tsx kept) and re-enable RLS.
 export default function App() {
+  useRealtimeRefresh()
   const link = ({ isActive }: { isActive: boolean }) =>
     `px-3 py-1.5 rounded-md text-sm ${isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`
   return (
@@ -19,6 +35,7 @@ export default function App() {
           <NavLink to="/customers" className={link}>Customers</NavLink>
           <NavLink to="/reports" className={link}>Reports</NavLink>
           <NavLink to="/settings" className={link}>Settings</NavLink>
+          <ThemeToggle />
         </header>
         <main className="p-4">
           <Routes>
