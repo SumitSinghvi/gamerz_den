@@ -3,10 +3,10 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Pick } from '@/components/Pick'
+import { XIcon } from 'lucide-react'
 import { bill, fmtClock, inr, playedMinutes, type GameSession, type RatePlan } from '@/lib/billing'
 import { PAY_METHODS, supabase, upsertCustomer, type Customer, type PayMethod, type Station } from '@/lib/supabase'
 
@@ -17,8 +17,7 @@ export default function Floor() {
   const [plans, setPlans] = useState<RatePlan[]>([])
   const [open, setOpen] = useState<GameSession[]>([])
   const [now, setNow] = useState(Date.now())
-  const [starting, setStarting] = useState<Station | null>(null)
-  const [ending, setEnding] = useState<GameSession | null>(null)
+  const [selId, setSelId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const [st, rp, se] = await Promise.all([
@@ -59,71 +58,121 @@ export default function Floor() {
     }
   }, [now, open, stations])
 
-  const pause = async (s: GameSession) =>
-    err((await supabase.from('sessions').update({ status: 'paused', paused_at: new Date().toISOString() }).eq('id', s.id)).error)
+  const sel = stations.find((x) => x.id === selId)
+  const selS = sel && byStation.get(sel.id)
+  const selPlan = selS && planById.get(selS.rate_plan_id)
+  const close = () => setSelId(null)
 
-  const resume = async (s: GameSession) => {
-    const extra = Math.round((Date.now() - Date.parse(s.paused_at!)) / 1000)
-    err((await supabase.from('sessions').update({ status: 'running', paused_at: null, paused_seconds: s.paused_seconds + extra }).eq('id', s.id)).error)
-  }
-
-  const extend = async (s: GameSession, min: number) =>
-    err((await supabase.from('sessions').update({ booked_minutes: (s.booked_minutes ?? 0) + min }).eq('id', s.id)).error)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setSelId(null)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   return (
-    <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
-      {stations.map((st) => {
-        const s = byStation.get(st.id)
-        const plan = s && planById.get(s.rate_plan_id)
-        const played = s ? playedMinutes(s, now) : 0
-        const left = s?.mode === 'prepaid' && s.booked_minutes ? s.booked_minutes - played : null
-        const live = s && plan ? bill(plan, played, s.booked_minutes, new Date(s.started_at)) : null
-        const tone = st.status === 'maintenance' ? 'bg-muted' : !s ? 'border-green-500/60'
-          : left != null && left <= 0 ? 'border-red-500 animate-pulse' : left != null && left <= 5 ? 'border-amber-500' : 'border-blue-500/60'
-        return (
-          <Card key={st.id} className={`border-2 ${tone}`}>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>{st.name}</CardTitle>
-              <Badge variant={s ? 'default' : 'secondary'}>
-                {st.status === 'maintenance' ? 'Maintenance' : s ? (s.status === 'paused' ? 'Paused' : 'Running') : 'Free'}
-              </Badge>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {s && plan && live ? (
-                <>
-                  <div className="text-3xl font-mono tabular-nums">{fmtClock(left ?? played)}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {left != null ? 'remaining' : 'elapsed'} · {plan.name} · {s.mode}
-                    {s.customers && <> · {s.customers.name || s.customers.phone}</>}
-                  </div>
-                  <div className="text-sm">Bill so far: <b>{inr(live.amount)}</b> ({live.minutes} min)</div>
-                  <div className="flex flex-wrap gap-2">
-                    {s.status === 'paused'
-                      ? <Button size="sm" variant="outline" onClick={() => resume(s)}>Resume</Button>
-                      : <Button size="sm" variant="outline" onClick={() => pause(s)}>Pause</Button>}
-                    {s.mode === 'prepaid' && <Button size="sm" variant="outline" onClick={() => extend(s, 30)}>+30m</Button>}
-                    <Button size="sm" variant="destructive" onClick={() => setEnding(s)}>End</Button>
-                  </div>
-                </>
-              ) : st.status === 'active' ? (
-                <Button className="w-full" onClick={() => setStarting(st)}>Start session</Button>
-              ) : (
-                <p className="text-sm text-muted-foreground">Out of service</p>
-              )}
-            </CardContent>
-          </Card>
-        )
-      })}
-      {stations.length === 0 && <p className="text-muted-foreground">No stations. Add them in Settings.</p>}
-      {starting && <StartDialog station={starting} plans={plans} onClose={() => setStarting(null)} />}
-      {ending && planById.get(ending.rate_plan_id) && (
-        <CheckoutDialog s={ending} plan={planById.get(ending.rate_plan_id)!} onClose={() => setEnding(null)} />
+    <div className="flex gap-4 items-start">
+      <div className="flex-1 min-w-0 grid gap-4 grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
+        {stations.map((st) => {
+          const s = byStation.get(st.id)
+          const plan = s && planById.get(s.rate_plan_id)
+          const played = s ? playedMinutes(s, now) : 0
+          const left = s?.mode === 'prepaid' && s.booked_minutes ? s.booked_minutes - played : null
+          const live = s && plan ? bill(plan, played, s.booked_minutes, new Date(s.started_at)) : null
+          const tone = st.status === 'maintenance' ? 'bg-muted' : !s ? 'border-green-500/60'
+            : left != null && left <= 0 ? 'border-red-500 animate-pulse' : left != null && left <= 5 ? 'border-amber-500' : 'border-blue-500/60'
+          return (
+            <Card key={st.id} role="button" tabIndex={0}
+              className={`border-2 ${tone} cursor-pointer hover:bg-muted/40 ${st.id === selId ? 'ring-2 ring-primary' : ''}`}
+              onClick={() => setSelId(st.id)} onKeyDown={(e) => e.key === 'Enter' && setSelId(st.id)}>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>{st.name}</CardTitle>
+                <Badge variant={s ? 'default' : 'secondary'}>
+                  {st.status === 'maintenance' ? 'Maintenance' : s ? (s.status === 'paused' ? 'Paused' : 'Running') : 'Free'}
+                </Badge>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                {s && plan && live ? (
+                  <>
+                    <div className="text-3xl font-mono tabular-nums">{fmtClock(left ?? played)}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {left != null ? 'remaining' : 'elapsed'} · {plan.name} · {s.mode}
+                      {s.customers && <> · {s.customers.name || s.customers.phone}</>}
+                    </div>
+                    <div className="text-sm">Bill so far: <b>{inr(live.amount)}</b></div>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">{st.status === 'active' ? 'Tap to start a session' : 'Out of service'}</p>
+                )}
+              </CardContent>
+            </Card>
+          )
+        })}
+        {stations.length === 0 && <p className="text-muted-foreground">No stations. Add them in Settings.</p>}
+      </div>
+      {sel && (
+        <aside className="fixed inset-y-0 right-0 z-40 w-full sm:w-96 overflow-y-auto border-l bg-background p-4 shadow-xl
+          lg:sticky lg:top-4 lg:z-auto lg:max-h-[calc(100vh-2rem)] lg:shrink-0 lg:rounded-xl lg:border lg:shadow-none">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-heading text-base font-medium">{sel.name}</h2>
+            <Button variant="ghost" size="icon-sm" onClick={close} aria-label="Close"><XIcon /></Button>
+          </div>
+          {selS && selPlan ? (
+            <SessionPanel key={selS.id} s={selS} plan={selPlan} station={sel} now={now} reload={load} onDone={close} />
+          ) : selS ? null : sel.status === 'active' ? (
+            <StartForm key={sel.id} station={sel} plans={plans} onStarted={load} />
+          ) : (
+            <p className="text-sm text-muted-foreground">Out of service</p>
+          )}
+        </aside>
       )}
     </div>
   )
 }
 
-function StartDialog({ station, plans, onClose }: { station: Station; plans: RatePlan[]; onClose: () => void }) {
+function SessionPanel({ s, plan, station, now, reload, onDone }:
+  { s: GameSession; plan: RatePlan; station: Station; now: number; reload: () => void; onDone: () => void }) {
+  const [checkout, setCheckout] = useState(false)
+  const played = playedMinutes(s, now)
+  const left = s.mode === 'prepaid' && s.booked_minutes ? s.booked_minutes - played : null
+  const live = bill(plan, played, s.booked_minutes, new Date(s.started_at))
+
+  const run = async (q: PromiseLike<{ error: { message: string } | null }>) => { err((await q).error); reload() }
+  const pause = () => run(supabase.from('sessions').update({ status: 'paused', paused_at: new Date().toISOString() }).eq('id', s.id))
+  const resume = () => {
+    const extra = Math.round((Date.now() - Date.parse(s.paused_at!)) / 1000)
+    run(supabase.from('sessions').update({ status: 'running', paused_at: null, paused_seconds: s.paused_seconds + extra }).eq('id', s.id))
+  }
+  const extend = (min: number) => run(supabase.from('sessions').update({ booked_minutes: (s.booked_minutes ?? 0) + min }).eq('id', s.id))
+
+  if (checkout) return <CheckoutForm s={s} plan={plan} onBack={() => setCheckout(false)} onDone={onDone} />
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-4xl font-mono tabular-nums">{fmtClock(left ?? played)}</div>
+        <div className="text-xs text-muted-foreground">
+          {left != null ? 'remaining' : 'elapsed'} · {s.status === 'paused' ? 'paused' : 'running'} on {station.name}
+        </div>
+      </div>
+      <dl className="grid grid-cols-2 gap-y-1 text-sm">
+        <dt className="text-muted-foreground">Plan</dt><dd>{plan.name} ({plan.players}P)</dd>
+        <dt className="text-muted-foreground">Billing</dt><dd className="capitalize">{s.mode}{s.booked_minutes ? ` · ${s.booked_minutes} min` : ''}</dd>
+        <dt className="text-muted-foreground">Started</dt><dd>{new Date(s.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</dd>
+        {s.customers && <><dt className="text-muted-foreground">Customer</dt><dd>{s.customers.name || s.customers.phone}</dd></>}
+        <dt className="text-muted-foreground">Bill so far</dt><dd><b>{inr(live.amount)}</b> ({live.minutes} min)</dd>
+      </dl>
+      <div className="flex flex-wrap gap-2">
+        {s.status === 'paused'
+          ? <Button variant="outline" onClick={resume}>Resume</Button>
+          : <Button variant="outline" onClick={pause}>Pause</Button>}
+        {s.mode === 'prepaid' && <Button variant="outline" onClick={() => extend(30)}>+30m</Button>}
+      </div>
+      <Button className="w-full" variant="destructive" onClick={() => setCheckout(true)}>End & checkout</Button>
+    </div>
+  )
+}
+
+function StartForm({ station, plans, onStarted }: { station: Station; plans: RatePlan[]; onStarted: () => void }) {
   const options = plans.filter((p) => p.active && p.console_type === station.console_type)
   const [planId, setPlanId] = useState(options[0]?.id ?? '')
   const [mode, setMode] = useState<'prepaid' | 'postpaid'>('postpaid')
@@ -144,7 +193,7 @@ function StartDialog({ station, plans, onClose }: { station: Station; plans: Rat
       })
       if (error) throw error
       toast.success(`${station.name} started`)
-      onClose()
+      onStarted()
     } catch (e) {
       toast.error((e as Error).message)
     } finally {
@@ -153,9 +202,8 @@ function StartDialog({ station, plans, onClose }: { station: Station; plans: Rat
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <DialogHeader><DialogTitle>Start — {station.name}</DialogTitle></DialogHeader>
+    <div className="grid gap-4">
+        <h3 className="text-sm font-medium text-muted-foreground">Start session</h3>
         <div className="grid gap-3">
           <div className="space-y-1.5">
             <Label>Rate plan</Label>
@@ -184,16 +232,13 @@ function StartDialog({ station, plans, onClose }: { station: Station; plans: Rat
             </div>
           </div>
         </div>
-        <DialogFooter>
-          <Button disabled={busy || !planId || (mode === 'prepaid' && !(Number(booked) > 0))} onClick={start}>Start</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <Button className="w-full" disabled={busy || !planId || (mode === 'prepaid' && !(Number(booked) > 0))} onClick={start}>Start</Button>
+    </div>
   )
 }
 
-function CheckoutDialog({ s, plan, onClose }: { s: GameSession; plan: RatePlan; onClose: () => void }) {
-  // Freeze the bill at the moment the dialog opens.
+function CheckoutForm({ s, plan, onBack, onDone }: { s: GameSession; plan: RatePlan; onBack: () => void; onDone: () => void }) {
+  // Freeze the bill at the moment checkout opens.
   const [at] = useState(Date.now())
   const played = playedMinutes(s, at)
   const { minutes, amount } = bill(plan, played, s.booked_minutes, new Date(s.started_at))
@@ -221,13 +266,12 @@ function CheckoutDialog({ s, plan, onClose }: { s: GameSession; plan: RatePlan; 
     setBusy(false)
     if (error) return toast.error(error.message)
     toast.success(`Session closed — ${inr(payable)}`)
-    onClose()
+    onDone()
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <DialogHeader><DialogTitle>Checkout</DialogTitle></DialogHeader>
+    <div className="grid gap-4">
+        <h3 className="text-sm font-medium text-muted-foreground">Checkout</h3>
         <div className="space-y-1 text-sm">
           <div>Played: <b>{fmtClock(played)}</b> · Billed: <b>{minutes} min</b> on {plan.name}</div>
           <div>Amount: <b>{inr(amount)}</b></div>
@@ -252,10 +296,10 @@ function CheckoutDialog({ s, plan, onClose }: { s: GameSession; plan: RatePlan; 
         <div className="text-lg">Payable <b>{inr(payable)}</b>
           {remaining !== 0 && <span className="text-sm text-destructive ml-2">{remaining > 0 ? `${inr(remaining)} left` : `${inr(-remaining)} over`}</span>}
         </div>
-        <DialogFooter>
-          <Button disabled={busy || remaining !== 0 || payable > amount} onClick={finish}>Confirm payment & end</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <div className="flex gap-2">
+          <Button variant="outline" disabled={busy} onClick={onBack}>Back</Button>
+          <Button className="flex-1" disabled={busy || remaining !== 0 || payable > amount} onClick={finish}>Confirm payment & end</Button>
+        </div>
+    </div>
   )
 }
