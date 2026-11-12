@@ -1,0 +1,161 @@
+import { useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Pick } from '@/components/Pick'
+import type { RatePlan } from '@/lib/billing'
+import { supabase, type Profile, type Station } from '@/lib/supabase'
+
+const done = (error: { message: string } | null, msg = 'Saved') => (error ? toast.error(error.message) : toast.success(msg))
+
+export default function Settings({ isOwner }: { isOwner: boolean }) {
+  return (
+    <Tabs defaultValue="rates" className="space-y-4">
+      <TabsList>
+        <TabsTrigger value="rates">Rates</TabsTrigger>
+        <TabsTrigger value="stations">Stations</TabsTrigger>
+        <TabsTrigger value="staff">Staff</TabsTrigger>
+      </TabsList>
+      {!isOwner && <p className="text-sm text-muted-foreground">Read-only — only the owner can change settings.</p>}
+      <TabsContent value="rates"><Rates ro={!isOwner} /></TabsContent>
+      <TabsContent value="stations"><Stations ro={!isOwner} /></TabsContent>
+      <TabsContent value="staff"><Staff ro={!isOwner} /></TabsContent>
+    </Tabs>
+  )
+}
+
+function Rates({ ro }: { ro: boolean }) {
+  const [rows, setRows] = useState<RatePlan[]>([])
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('rate_plans').select('*').order('console_type').order('players')
+    setRows(data ?? [])
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  const set = (i: number, patch: Partial<RatePlan>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  const save = async (r: RatePlan) => {
+    const { id, ...rest } = r
+    done((await supabase.from('rate_plans').update({ ...rest, peak_start: r.peak_start || null, peak_end: r.peak_end || null }).eq('id', id)).error)
+  }
+  const add = async () => {
+    const { error } = await supabase.from('rate_plans').insert({ name: 'New plan', rate_per_hour: 100 })
+    if (error) return toast.error(error.message)
+    load()
+  }
+  const num = (v: string) => (v === '' ? 0 : Number(v))
+
+  return (
+    <div className="space-y-3 overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Name</TableHead><TableHead>Console</TableHead><TableHead>Players</TableHead><TableHead>₹/hr</TableHead>
+            <TableHead>Peak ₹/hr</TableHead><TableHead>Peak from</TableHead><TableHead>Peak to</TableHead>
+            <TableHead>Block (min)</TableHead><TableHead>Grace (min)</TableHead><TableHead>Active</TableHead><TableHead />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((r, i) => (
+            <TableRow key={r.id}>
+              <TableCell><Input disabled={ro} value={r.name} onChange={(e) => set(i, { name: e.target.value })} /></TableCell>
+              <TableCell><Input disabled={ro} className="w-24" value={r.console_type} onChange={(e) => set(i, { console_type: e.target.value })} /></TableCell>
+              <TableCell><Input disabled={ro} className="w-16" type="number" min={1} value={r.players} onChange={(e) => set(i, { players: num(e.target.value) })} /></TableCell>
+              <TableCell><Input disabled={ro} className="w-20" type="number" min={0} value={r.rate_per_hour} onChange={(e) => set(i, { rate_per_hour: num(e.target.value) })} /></TableCell>
+              <TableCell><Input disabled={ro} className="w-20" type="number" min={0} value={r.peak_rate_per_hour ?? ''} onChange={(e) => set(i, { peak_rate_per_hour: e.target.value === '' ? null : Number(e.target.value) })} /></TableCell>
+              <TableCell><Input disabled={ro} type="time" value={r.peak_start?.slice(0, 5) ?? ''} onChange={(e) => set(i, { peak_start: e.target.value })} /></TableCell>
+              <TableCell><Input disabled={ro} type="time" value={r.peak_end?.slice(0, 5) ?? ''} onChange={(e) => set(i, { peak_end: e.target.value })} /></TableCell>
+              <TableCell><Input disabled={ro} className="w-16" type="number" min={1} value={r.block_minutes} onChange={(e) => set(i, { block_minutes: num(e.target.value) })} /></TableCell>
+              <TableCell><Input disabled={ro} className="w-16" type="number" min={0} value={r.grace_minutes} onChange={(e) => set(i, { grace_minutes: num(e.target.value) })} /></TableCell>
+              <TableCell><input type="checkbox" aria-label="Active" disabled={ro} checked={r.active} onChange={(e) => set(i, { active: e.target.checked })} /></TableCell>
+              <TableCell>{!ro && <Button size="sm" onClick={() => save(r)}>Save</Button>}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      {!ro && <Button variant="outline" onClick={add}>Add rate plan</Button>}
+    </div>
+  )
+}
+
+function Stations({ ro }: { ro: boolean }) {
+  const [rows, setRows] = useState<Station[]>([])
+  const [name, setName] = useState('')
+  const [type, setType] = useState('PS5')
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('stations').select('*').order('name')
+    setRows(data ?? [])
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const { error } = await supabase.from('stations').insert({ name: name.trim(), console_type: type.trim() || 'PS5' })
+    if (error) return toast.error(error.message)
+    setName('')
+    load()
+  }
+  const toggle = async (s: Station) => {
+    const { error } = await supabase.from('stations').update({ status: s.status === 'active' ? 'maintenance' : 'active' }).eq('id', s.id)
+    if (error) return toast.error(error.message)
+    load()
+  }
+
+  return (
+    <div className="space-y-3 max-w-xl">
+      <Table>
+        <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Console</TableHead><TableHead>Status</TableHead><TableHead /></TableRow></TableHeader>
+        <TableBody>
+          {rows.map((s) => (
+            <TableRow key={s.id}>
+              <TableCell>{s.name}</TableCell><TableCell>{s.console_type}</TableCell><TableCell>{s.status}</TableCell>
+              <TableCell className="text-right">{!ro && <Button size="sm" variant="outline" onClick={() => toggle(s)}>{s.status === 'active' ? 'Set maintenance' : 'Set active'}</Button>}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      {!ro && (
+        <form onSubmit={add} className="flex gap-2">
+          <Input placeholder="Station name (e.g. PS5-5)" required value={name} onChange={(e) => setName(e.target.value)} />
+          <Input placeholder="Console type" className="w-32" value={type} onChange={(e) => setType(e.target.value)} />
+          <Button type="submit">Add</Button>
+        </form>
+      )}
+      <p className="text-xs text-muted-foreground">Console type must match a rate plan's console type for it to appear when starting a session.</p>
+    </div>
+  )
+}
+
+function Staff({ ro }: { ro: boolean }) {
+  const [rows, setRows] = useState<Profile[]>([])
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('profiles').select('*').order('created_at')
+    setRows(data ?? [])
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  const setRole = async (p: Profile, role: string) => {
+    done((await supabase.from('profiles').update({ role }).eq('id', p.id)).error, 'Role updated')
+    load()
+  }
+
+  return (
+    <Table className="max-w-xl">
+      <TableHeader><TableRow><TableHead>Email</TableHead><TableHead>Role</TableHead></TableRow></TableHeader>
+      <TableBody>
+        {rows.map((p) => (
+          <TableRow key={p.id}>
+            <TableCell>{p.email}</TableCell>
+            <TableCell>
+              {ro ? p.role : (
+                <Pick className="w-36" value={p.role} onChange={(v) => setRole(p, v)}
+                  items={['owner', 'manager', 'cashier', 'pending'].map((r) => ({ value: r, label: r }))} />
+              )}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+}

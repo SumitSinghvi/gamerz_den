@@ -1,0 +1,91 @@
+import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { inr } from '@/lib/billing'
+import { supabase } from '@/lib/supabase'
+
+type Row = { kind: string; method: string; amount: number; sessions: { stations: { name: string } | null } | null }
+
+const today = () => new Date().toLocaleDateString('en-CA') // YYYY-MM-DD local
+
+const sumBy = (rows: Row[], key: (r: Row) => string) => {
+  const m = new Map<string, number>()
+  for (const r of rows) m.set(key(r), (m.get(key(r)) ?? 0) + Number(r.amount))
+  return [...m].sort((a, b) => b[1] - a[1])
+}
+
+export default function Reports() {
+  const [day, setDay] = useState(today())
+  const [rows, setRows] = useState<Row[]>([])
+  const [sessions, setSessions] = useState(0)
+
+  useEffect(() => {
+    const from = new Date(`${day}T00:00:00`)
+    const to = new Date(from.getTime() + 864e5)
+    const [a, b] = [from.toISOString(), to.toISOString()]
+    Promise.all([
+      supabase.from('payments').select('kind, method, amount, sessions(stations(name))').gte('created_at', a).lt('created_at', b),
+      supabase.from('sessions').select('id', { count: 'exact', head: true }).eq('status', 'ended').gte('ended_at', a).lt('ended_at', b),
+    ]).then(([p, s]) => {
+      const e = p.error || s.error
+      if (e) toast.error(e.message)
+      setRows((p.data ?? []) as unknown as Row[])
+      setSessions(s.count ?? 0)
+    })
+  }, [day])
+
+  const sessionRows = rows.filter((r) => r.kind === 'session')
+  const revenue = sessionRows.reduce((t, r) => t + Number(r.amount), 0)
+  // Money actually collected today: excludes wallet redemptions (collected at top-up time).
+  const collected = rows.filter((r) => r.method !== 'wallet').reduce((t, r) => t + Number(r.amount), 0)
+  const byMethod = sumBy(rows.filter((r) => r.method !== 'wallet' || r.kind === 'session'), (r) => (r.kind === 'wallet_topup' ? `${r.method} (wallet top-up)` : r.method))
+  const byStation = sumBy(sessionRows, (r) => r.sessions?.stations?.name ?? '—')
+
+  return (
+    <div className="space-y-4 max-w-4xl">
+      <div className="flex items-end gap-2">
+        <div className="space-y-1.5"><Label htmlFor="day">Date</Label><Input id="day" type="date" value={day} onChange={(e) => setDay(e.target.value)} /></div>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Stat label="Session revenue" value={inr(revenue)} />
+        <Stat label="Cash/UPI/Card collected" value={inr(collected)} />
+        <Stat label="Sessions ended" value={String(sessions)} />
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Breakdown title="By payment method" rows={byMethod} />
+        <Breakdown title="By station" rows={byStation} />
+      </div>
+    </div>
+  )
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-sm text-muted-foreground font-normal">{label}</CardTitle></CardHeader>
+      <CardContent className="text-2xl font-semibold tabular-nums">{value}</CardContent>
+    </Card>
+  )
+}
+
+function Breakdown({ title, rows }: { title: string; rows: [string, number][] }) {
+  return (
+    <Card>
+      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader><TableRow><TableHead>Item</TableHead><TableHead className="text-right">Amount</TableHead></TableRow></TableHeader>
+          <TableBody>
+            {rows.map(([k, v]) => (
+              <TableRow key={k}><TableCell className="capitalize">{k}</TableCell><TableCell className="text-right tabular-nums">{inr(v)}</TableCell></TableRow>
+            ))}
+            {rows.length === 0 && <TableRow><TableCell colSpan={2} className="text-muted-foreground">No data</TableCell></TableRow>}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  )
+}
