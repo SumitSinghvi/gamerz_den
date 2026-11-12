@@ -143,6 +143,16 @@ function SessionPanel({ s, plan, station, now, reload, onDone }:
     run(supabase.from('sessions').update({ status: 'running', paused_at: null, paused_seconds: s.paused_seconds + extra }).eq('id', s.id))
   }
   const extend = (min: number) => run(supabase.from('sessions').update({ booked_minutes: (s.booked_minutes ?? 0) + min }).eq('id', s.id))
+  // Hard delete for sessions started by mistake; audit_sessions trigger keeps a record. Never touches ended (paid) sessions.
+  const remove = async () => {
+    if (!confirm(`Delete this session on ${station.name}? Use only if it was started by mistake. No bill will be recorded.`)) return
+    const { data, error } = await supabase.from('sessions').delete().eq('id', s.id).neq('status', 'ended').select('id')
+    if (error) return toast.error(error.message)
+    if (!data?.length) return toast.error('Session not deleted (already ended or not allowed)')
+    toast.success('Session deleted')
+    reload()
+    onDone()
+  }
 
   if (checkout) return <CheckoutForm s={s} plan={plan} onBack={() => setCheckout(false)} onDone={onDone} />
 
@@ -161,6 +171,7 @@ function SessionPanel({ s, plan, station, now, reload, onDone }:
         {s.customers && <><dt className="text-muted-foreground">Customer</dt><dd>{s.customers.name || s.customers.phone}</dd></>}
         <dt className="text-muted-foreground">Bill so far</dt><dd><b>{inr(live.amount)}</b> ({live.minutes} min)</dd>
       </dl>
+      {!s.customer_id && <AttachCustomer sessionId={s.id} onAttached={reload} />}
       <div className="flex flex-wrap gap-2">
         {s.status === 'paused'
           ? <Button variant="outline" onClick={resume}>Resume</Button>
@@ -168,6 +179,7 @@ function SessionPanel({ s, plan, station, now, reload, onDone }:
         {s.mode === 'prepaid' && <Button variant="outline" onClick={() => extend(30)}>+30m</Button>}
       </div>
       <Button className="w-full" variant="destructive" onClick={() => setCheckout(true)}>End & checkout</Button>
+      <Button className="w-full text-muted-foreground" variant="ghost" onClick={remove}>Delete session (started by mistake)</Button>
     </div>
   )
 }
@@ -221,16 +233,7 @@ function StartForm({ station, plans, onStarted }: { station: Station; plans: Rat
               <Input id="booked" type="number" min={15} step={15} value={booked} onChange={(e) => setBooked(e.target.value)} />
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="phone">Phone (optional)</Label>
-              <Input id="phone" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="cname">Name</Label>
-              <Input id="cname" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-          </div>
+          <CustomerFields phone={phone} name={name} setPhone={setPhone} setName={setName} />
         </div>
         <Button className="w-full" disabled={busy || !planId || (mode === 'prepaid' && !(Number(booked) > 0))} onClick={start}>Start</Button>
     </div>
@@ -277,6 +280,7 @@ function CheckoutForm({ s, plan, onBack, onDone }: { s: GameSession; plan: RateP
           <div>Amount: <b>{inr(amount)}</b></div>
           {customer && <div>Customer: {customer.name || customer.phone} · Wallet {inr(customer.wallet_balance)}</div>}
         </div>
+        {!customer && !s.customer_id && <AttachCustomer sessionId={s.id} onAttached={setCustomer} />}
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5 col-span-2">
             <Label htmlFor="disc">Discount (₹)</Label>
@@ -300,6 +304,84 @@ function CheckoutForm({ s, plan, onBack, onDone }: { s: GameSession; plan: RateP
           <Button variant="outline" disabled={busy} onClick={onBack}>Back</Button>
           <Button className="flex-1" disabled={busy || remaining !== 0 || payable > amount} onClick={finish}>Confirm payment & end</Button>
         </div>
+    </div>
+  )
+}
+
+/** Phone + name inputs with live suggestions from existing customers; picking one fills both. */
+function CustomerFields({ phone, name, setPhone, setName }:
+  { phone: string; name: string; setPhone: (v: string) => void; setName: (v: string) => void }) {
+  const [q, setQ] = useState('') // text last typed into phone or name
+  const [matches, setMatches] = useState<Customer[]>([])
+
+  useEffect(() => {
+    const term = q.replace(/[,()%*\\]/g, '').trim() // keep PostgREST or() filter intact
+    if (term.length < 2) return
+    let live = true
+    const t = setTimeout(async () => {
+      const { data } = await supabase.from('customers').select('*').or(`phone.ilike.%${term}%,name.ilike.%${term}%`).limit(5)
+      if (live) setMatches(data ?? [])
+    }, 200)
+    return () => { live = false; clearTimeout(t) }
+  }, [q])
+
+  const pick = (c: Customer) => { setPhone(c.phone); setName(c.name ?? ''); setQ('') }
+  const shown = q.trim().length >= 2 ? matches : []
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="phone">Phone (optional)</Label>
+          <Input id="phone" inputMode="tel" autoComplete="off" value={phone} onChange={(e) => { setPhone(e.target.value); setQ(e.target.value) }} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cname">Name</Label>
+          <Input id="cname" autoComplete="off" value={name} onChange={(e) => { setName(e.target.value); setQ(e.target.value) }} />
+        </div>
+      </div>
+      {shown.length > 0 && (
+        <ul aria-label="Matching customers" className="rounded-md border divide-y text-sm">
+          {shown.map((c) => (
+            <li key={c.id}>
+              <button type="button" className="w-full px-3 py-2.5 text-left hover:bg-muted" onClick={() => pick(c)}>
+                <span className="font-medium">{c.name || 'No name'}</span> <span className="text-muted-foreground">{c.phone}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  )
+}
+
+/** Attach a customer to a session that started without one (end_session reads customer_id from the session). */
+function AttachCustomer({ sessionId, onAttached }: { sessionId: string; onAttached: (c: Customer) => void }) {
+  const [phone, setPhone] = useState('')
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const attach = async () => {
+    setBusy(true)
+    try {
+      const c = await upsertCustomer(phone, name)
+      if (!c) return
+      const { error } = await supabase.from('sessions').update({ customer_id: c.id }).eq('id', sessionId)
+      if (error) throw error
+      toast.success(`Customer added: ${c.name || c.phone}`)
+      onAttached(c)
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="grid gap-2 rounded-md border p-3">
+      <h4 className="text-sm font-medium">Add customer</h4>
+      <CustomerFields phone={phone} name={name} setPhone={setPhone} setName={setName} />
+      <Button variant="outline" disabled={busy || !phone.trim()} onClick={attach}>Add customer</Button>
     </div>
   )
 }

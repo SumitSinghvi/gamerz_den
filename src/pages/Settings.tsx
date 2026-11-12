@@ -49,7 +49,7 @@ function Rates({ ro }: { ro: boolean }) {
   return (
     <div className="space-y-3 overflow-x-auto">
       <Table>
-        <TableHeader>
+        <TableHeader className="max-md:hidden">
           <TableRow>
             <TableHead>Name</TableHead><TableHead>Console</TableHead><TableHead>Players</TableHead><TableHead>₹/hr</TableHead>
             <TableHead>Peak ₹/hr</TableHead><TableHead>Peak from</TableHead><TableHead>Peak to</TableHead>
@@ -58,18 +58,18 @@ function Rates({ ro }: { ro: boolean }) {
         </TableHeader>
         <TableBody>
           {rows.map((r, i) => (
-            <TableRow key={r.id}>
-              <TableCell><Input disabled={ro} value={r.name} onChange={(e) => set(i, { name: e.target.value })} /></TableCell>
-              <TableCell><Input disabled={ro} className="w-24" value={r.console_type} onChange={(e) => set(i, { console_type: e.target.value })} /></TableCell>
-              <TableCell><Input disabled={ro} className="w-16" type="number" min={1} value={r.players} onChange={(e) => set(i, { players: num(e.target.value) })} /></TableCell>
-              <TableCell><Input disabled={ro} className="w-20" type="number" min={0} value={r.rate_per_hour} onChange={(e) => set(i, { rate_per_hour: num(e.target.value) })} /></TableCell>
-              <TableCell><Input disabled={ro} className="w-20" type="number" min={0} value={r.peak_rate_per_hour ?? ''} onChange={(e) => set(i, { peak_rate_per_hour: e.target.value === '' ? null : Number(e.target.value) })} /></TableCell>
-              <TableCell><Input disabled={ro} type="time" value={r.peak_start?.slice(0, 5) ?? ''} onChange={(e) => set(i, { peak_start: e.target.value })} /></TableCell>
-              <TableCell><Input disabled={ro} type="time" value={r.peak_end?.slice(0, 5) ?? ''} onChange={(e) => set(i, { peak_end: e.target.value })} /></TableCell>
-              <TableCell><Input disabled={ro} className="w-16" type="number" min={1} value={r.block_minutes} onChange={(e) => set(i, { block_minutes: num(e.target.value) })} /></TableCell>
-              <TableCell><Input disabled={ro} className="w-16" type="number" min={0} value={r.grace_minutes} onChange={(e) => set(i, { grace_minutes: num(e.target.value) })} /></TableCell>
-              <TableCell><input type="checkbox" aria-label="Active" disabled={ro} checked={r.active} onChange={(e) => set(i, { active: e.target.checked })} /></TableCell>
-              <TableCell>{!ro && <Button size="sm" onClick={() => save(r)}>Save</Button>}</TableCell>
+            <TableRow key={r.id} className="max-md:grid max-md:grid-cols-2 max-md:gap-x-3 max-md:gap-y-2 max-md:py-3">
+              <C label="Name" className="max-md:col-span-2"><Input disabled={ro} value={r.name} onChange={(e) => set(i, { name: e.target.value })} /></C>
+              <C label="Console"><Input disabled={ro} className="md:w-24" value={r.console_type} onChange={(e) => set(i, { console_type: e.target.value })} /></C>
+              <C label="Players"><Input disabled={ro} className="md:w-16" type="number" min={1} value={r.players} onChange={(e) => set(i, { players: num(e.target.value) })} /></C>
+              <C label="₹/hr"><Input disabled={ro} className="md:w-20" type="number" min={0} value={r.rate_per_hour} onChange={(e) => set(i, { rate_per_hour: num(e.target.value) })} /></C>
+              <C label="Peak ₹/hr"><Input disabled={ro} className="md:w-20" type="number" min={0} value={r.peak_rate_per_hour ?? ''} onChange={(e) => set(i, { peak_rate_per_hour: e.target.value === '' ? null : Number(e.target.value) })} /></C>
+              <C label="Peak from"><Input disabled={ro} type="time" value={r.peak_start?.slice(0, 5) ?? ''} onChange={(e) => set(i, { peak_start: e.target.value })} /></C>
+              <C label="Peak to"><Input disabled={ro} type="time" value={r.peak_end?.slice(0, 5) ?? ''} onChange={(e) => set(i, { peak_end: e.target.value })} /></C>
+              <C label="Block (min)"><Input disabled={ro} className="md:w-16" type="number" min={1} value={r.block_minutes} onChange={(e) => set(i, { block_minutes: num(e.target.value) })} /></C>
+              <C label="Grace (min)"><Input disabled={ro} className="md:w-16" type="number" min={0} value={r.grace_minutes} onChange={(e) => set(i, { grace_minutes: num(e.target.value) })} /></C>
+              <C label="Active"><input type="checkbox" aria-label="Active" disabled={ro} checked={r.active} onChange={(e) => set(i, { active: e.target.checked })} /></C>
+              <TableCell className="max-md:col-span-2 max-md:p-0">{!ro && <Button size="sm" className="max-md:h-9 max-md:w-full" onClick={() => save(r)}>Save</Button>}</TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -78,6 +78,11 @@ function Rates({ ro }: { ro: boolean }) {
     </div>
   )
 }
+
+// Table cell that shows its column label above the value when rows stack into cards (< md).
+const C = ({ label, className, ...props }: React.ComponentProps<typeof TableCell> & { label: string }) => (
+  <TableCell data-label={label} className={`max-md:p-0 max-md:before:mb-1 max-md:before:block max-md:before:text-xs max-md:before:text-muted-foreground max-md:before:content-[attr(data-label)] ${className ?? ''}`} {...props} />
+)
 
 function Stations({ ro }: { ro: boolean }) {
   const [rows, setRows] = useState<Station[]>([])
